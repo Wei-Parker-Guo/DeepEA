@@ -31,8 +31,6 @@ class Optimizer:
         self.report_generation = report_generation
 
     def fit(self):
-        delta = self.stop_delta + 1e6
-
         # initialisation of gene pool
         for i in range(self.population):
             self.genes.append(Gene(self.problem.gene_length, self.problem.gene_alphabet_length,
