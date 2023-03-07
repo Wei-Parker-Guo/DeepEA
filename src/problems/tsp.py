@@ -26,7 +26,7 @@ class City:
 
 # The Travelling Salesman Problem
 class TSP(Problem):
-    def __init__(self, cities=200, city_distrib=CityDistrib.NORMAL):
+    def __init__(self, cities=50, city_distrib=CityDistrib.NORMAL):
         super().__init__(param_length=cities)
         self.gene_alphabet_length = cities
         self.gene_alphabet_repeat = False
@@ -45,6 +45,8 @@ class TSP(Problem):
         total_distance = 0
         for i in range(len(solution)-1):
             total_distance += self.cities[solution[i]].distance(self.cities[solution[i+1]])
+        # return to start city from end city
+        total_distance += self.cities[solution[0]].distance(self.cities[solution[-1]])
         return total_distance
 
     def gene_to_solution(self, gene):

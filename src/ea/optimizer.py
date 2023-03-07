@@ -12,8 +12,8 @@ class OptimizerMode(Enum):
 
 
 class Optimizer:
-    def __init__(self, problem, mode=OptimizerMode.VANILLA, population=1000,
-                 candidate_buffer=2, max_mutate_rate=0.01, stop_delta=1e-6,
+    def __init__(self, problem, mode=OptimizerMode.VANILLA, population=10000,
+                 candidate_buffer=50, max_mutate_rate=0.01, stop_delta=1e-6, stop_interval=20,
                  verbose=False, report_generation=10):
         self.problem = problem
         self.mode = mode
@@ -21,6 +21,7 @@ class Optimizer:
         self.candidate_buffer = candidate_buffer
         self.max_mutate_rate = max_mutate_rate
         self.stop_delta = stop_delta
+        self.stop_interval = stop_interval
         self.verbose = verbose
         self.genes = []
         # meta data for reporting
@@ -36,16 +37,22 @@ class Optimizer:
         for i in range(self.population):
             self.genes.append(Gene(self.problem.gene_length, self.problem.gene_alphabet_length,
                                    self.problem.gene_alphabet_repeat))
-        print('Initialized EA: {} population, {} mode.\n'.format(self.population, self.mode.name))
+        print('Initialized EA: {} population, {} elites, {} mode.'.format(
+            self.population, self.candidate_buffer, self.mode.name))
+        print('Stopping Condition: loss delta less than {} for {} generations.\n'.format(
+            self.stop_delta, self.stop_interval))
         print('{}\n'.format(self.problem))
 
         # main iteration loop
         prev_loss = 0
         print('Evolving')
-        while delta > self.stop_delta:
+        # stopping condition: delta is small enough for specified generation interval
+        s_interval = 0
+        while s_interval < self.stop_interval:
             solution = self.solve()
             loss = self.problem.get_loss(solution)
             delta = abs(prev_loss - loss)
+            s_interval = s_interval + 1 if delta < self.stop_delta else 0
             prev_loss = loss
             if self.generation % self.report_generation == 0 and self.verbose:
                 self.report()
