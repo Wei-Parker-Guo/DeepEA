@@ -37,6 +37,7 @@ class Optimizer:
             self.genes.append(Gene(self.problem.gene_length, self.problem.gene_alphabet_length,
                                    self.problem.gene_alphabet_repeat))
         print('Initialized EA: {} population, {} mode.\n'.format(self.population, self.mode.name))
+        print('{}\n'.format(self.problem))
 
         # main iteration loop
         prev_loss = 0
@@ -157,5 +158,5 @@ if __name__ == '__main__':
     # np.random.seed(5260)
     # test for vanilla solver
     tsp_p = TSP()
-    optimizer = Optimizer(tsp_p, verbose=True)
+    optimizer = Optimizer(tsp_p, verbose=False)  # turn on verbose for logging
     optimizer.fit()

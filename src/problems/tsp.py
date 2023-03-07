@@ -26,14 +26,14 @@ class City:
 
 # The Travelling Salesman Problem
 class TSP(Problem):
-    def __init__(self, nodes=200, city_distrib=CityDistrib.NORMAL):
-        super().__init__(param_length=nodes)
-        self.gene_alphabet_length = nodes
+    def __init__(self, cities=200, city_distrib=CityDistrib.NORMAL):
+        super().__init__(param_length=cities)
+        self.gene_alphabet_length = cities
         self.gene_alphabet_repeat = False
         # initialize cities
         self.city_distrib = city_distrib
         self.cities = []
-        for i in range(nodes):
+        for i in range(cities):
             city = None
             if city_distrib == CityDistrib.UNIFORM:
                 city = City(random(), random())
@@ -49,3 +49,7 @@ class TSP(Problem):
 
     def gene_to_solution(self, gene):
         return list(gene.sequence)
+
+    def __repr__(self):
+        return 'Problem Type: {}\nParameters: {} cities, {} distribution'.format(
+            'Travelling Salesman', len(self.cities), self.city_distrib.name)
