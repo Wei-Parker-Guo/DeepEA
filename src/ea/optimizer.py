@@ -4,6 +4,11 @@ from itertools import combinations
 from random import shuffle, random, randint, seed
 from src.ea.gene import Gene
 from src.problems.tsp import TSP
+from models import ModelArgs, MLPDis, MLPGen, BagDataset
+import torch
+from torch import nn
+from torch.optim import Adam
+from torch.utils.data import DataLoader
 
 
 class OptimizerMode(Enum):
@@ -13,6 +18,8 @@ class OptimizerMode(Enum):
 
 class Optimizer:
     def __init__(self, problem, mode=OptimizerMode.VANILLA, population=10000,
+                 bags_n=100, noise_size=10, depth=3, batch_size=32, device='cpu',  # DL parameters
+                 real_alpha=.7, train_iter=3, converge_epochs=3, converge_delta=3e-6,  # DL parameters
                  candidate_buffer=50, max_mutate_rate=0.01, stop_delta=1e-6, stop_interval=20,
                  verbose=False, report_generation=10):
         self.problem = problem
@@ -24,6 +31,22 @@ class Optimizer:
         self.stop_interval = stop_interval
         self.verbose = verbose
         self.genes = []
+        # initiate components for deep models if mode is deep
+        self.bags_n = bags_n
+        if mode == OptimizerMode.MLP:
+            self.model_args = ModelArgs(gene_length=problem.gene_length, bag_size=population//bags_n,
+                                        noise_size=noise_size, depth=depth, batch_size=batch_size, device=device)
+            self.mlp_dis = MLPDis(self.model_args)
+            self.mlp_gen = MLPGen(self.model_args)
+            self.criterion = nn.MSELoss()
+            self.mlp_d_optimizer = Adam(self.mlp_dis.parameters())
+            self.mlp_g_optimizer = Adam(self.mlp_gen.parameters())
+            self.bag_dataset = BagDataset()
+            self.real_alpha = real_alpha
+            self.train_iter = train_iter
+            self.converge_epochs = converge_epochs
+            self.converge_delta = converge_delta
+            self.gen_feats = None
         # meta data for reporting
         self.loss = 1e6
         self.best_candidate = None
@@ -68,6 +91,17 @@ class Optimizer:
         top_k_idx = np.argsort(ls)[-self.candidate_buffer:]
         best_candidates = [self.genes[i] for i in top_k_idx]
 
+        # train deep models only if needed, ignore initiation round since there is no fitness delta yet
+        if self.mode == OptimizerMode.MLP and self.generation > 0 and self.generation % self.train_iter == 0:
+            self.mlp_train()
+            self.bag_dataset = BagDataset()  # reset dataset for next training
+
+        # generate crossover and mutate probs from deep models if specified
+        if self.mode == OptimizerMode.MLP:
+            noises = torch.randn(self.bags_n, self.model_args.noise_size)
+            self.mlp_gen.eval()
+            self.gen_feats = self.mlp_gen(noises).detach().numpy()
+
         # populate next generation with crossover and mutation
         self.crossover(best_candidates)
         self.mutate(best_candidates)
@@ -111,12 +145,14 @@ class Optimizer:
                     g_rest = [n for n in g2 if n not in g]
                     g = g + g_rest
                     offspring = g
+                self.genes[sn] = Gene(offspring)
 
             # MLP EA uses a trainable crossover operator based on MLP
             elif self.mode == OptimizerMode.MLP:
-                pass
+                offspring, crossover_probs = self.mlp_crossover(g1, g2, sn)
+                self.genes[sn] = Gene(offspring)
+                self.genes[sn].crossover_probs = crossover_probs
 
-            self.genes[sn] = Gene(offspring)
             sn += 1
 
     def mutate(self, best_candidates):
@@ -145,10 +181,130 @@ class Optimizer:
 
             # MLP EA uses a trainable mutation operator based on MLP
             elif self.mode == OptimizerMode.MLP:
-                pass
+                g = self.mlp_mutate(g, sn)
 
             self.genes[sn] = g
             sn += 1
+
+    def mlp_train(self):
+        # update dataset
+        fitness_deltas = []
+        for i in range(0, self.population, self.model_args.bag_size):
+            gs = self.genes[i:i+self.model_args.bag_size]
+            avg_fitness_delta = 0
+            for g in gs:
+                avg_fitness_delta += self.loss+g.fitness
+            avg_fitness_delta /= self.model_args.bag_size
+            fitness_deltas.append(avg_fitness_delta)
+        # normalise bag scores
+        fitness_deltas = np.array(fitness_deltas)
+        fitness_deltas = fitness_deltas / fitness_deltas.sum()
+        # add to bag
+        for i in range(0, self.population, self.model_args.bag_size):
+            gs = self.genes[i:i+self.model_args.bag_size]
+            self.bag_dataset.add_bag(gs, fitness_deltas[i//self.model_args.bag_size])
+        # create loader
+        data_loader = DataLoader(self.bag_dataset, batch_size=self.model_args.batch_size, shuffle=True)
+
+        # training
+        converge_delta = 1e6
+        converge_epochs = 0
+        prev_loss = 0
+        epoch_n = 1
+
+        print('\nTraining MLP GAN, Generation {}:\n'.format(self.generation))
+
+        # one epoch
+        while converge_epochs < self.converge_epochs or converge_delta > self.converge_delta:
+            last_loss = 0
+            for i, (feats, fitness_deltas) in enumerate(data_loader):
+                feats = feats.float()
+                fitness_deltas = fitness_deltas.float()
+
+                # train discriminator
+                self.mlp_dis.train()
+                self.mlp_gen.eval()
+                self.mlp_d_optimizer.zero_grad()
+                pred_deltas = self.mlp_dis(feats)
+                # fake samples
+                noises = torch.randn(self.model_args.batch_size, self.model_args.noise_size)
+                gen_deltas = self.mlp_dis(self.mlp_gen(noises))
+                # loss calculation
+                real_loss = self.criterion(pred_deltas.reshape(-1), fitness_deltas)
+                fake_loss = self.criterion(gen_deltas.reshape(-1), torch.zeros(self.model_args.batch_size))
+                loss = self.real_alpha * real_loss + (1-self.real_alpha) * fake_loss
+                last_loss = loss.item()
+                loss.backward()
+                self.mlp_d_optimizer.step()
+
+                # train generator
+                self.mlp_dis.eval()
+                self.mlp_gen.train()
+                self.mlp_g_optimizer.zero_grad()
+                noises = torch.randn(self.model_args.batch_size, self.model_args.noise_size)
+                feats = self.mlp_gen(noises)
+                gen_deltas = self.mlp_dis(feats)
+                target_deltas = torch.ones(gen_deltas.shape[0])
+                loss = self.criterion(gen_deltas.reshape(-1), target_deltas)
+                # add a negative log penalty term to punish zero entries in generation
+                # loss += -0.2 * torch.log(feats+1e-6).sum()
+                loss.backward()
+                self.mlp_g_optimizer.step()
+
+            converge_delta = abs(prev_loss-last_loss)
+            converge_epochs = converge_epochs+1 if converge_delta <= self.converge_delta else 0
+            prev_loss = last_loss
+
+            # reporting
+            if self.verbose and epoch_n % 2 == 0:
+                print('Epoch {} loss: {}'.format(epoch_n, last_loss))
+            elif not self.verbose and epoch_n % 10 == 0:
+                print('.', end='')
+
+            epoch_n += 1
+
+        print('Training Complete.\n')
+
+    def mlp_crossover(self, g1, g2, sn):
+        # get crossover probs
+        bag_n = sn // self.model_args.bag_size
+        crossover_probs = self.gen_feats[bag_n][:self.model_args.bag_size * self.model_args.gene_length * 2]
+        crossover_probs = crossover_probs.reshape(self.model_args.bag_size, -1)[sn % self.model_args.bag_size]
+
+        # spawn
+        offspring = []
+        ga_probs = crossover_probs[:self.model_args.gene_length]
+        ga_probs = ga_probs / ga_probs.sum()
+        gb_probs = crossover_probs[self.model_args.gene_length:]
+        gb_probs = gb_probs / gb_probs.sum()
+        idx = np.arange(g1.shape[0])
+        ga = np.random.choice(g1, p=ga_probs)
+        gb = np.random.choice(g1, p=gb_probs)
+        for i in range(min(ga, gb), max(ga, gb)):
+            offspring.append(g1[i])
+        g_rest = [n for n in g2 if n not in offspring]
+        offspring = offspring + g_rest
+
+        return offspring, crossover_probs
+
+    def mlp_mutate(self, g, sn):
+        # get mutate rate
+        bag_n = sn // self.model_args.bag_size
+        mutate_probs = self.gen_feats[bag_n][self.model_args.bag_size * self.model_args.gene_length * 2:]
+        mutate_rate = mutate_probs[sn % self.model_args.bag_size]
+
+        # spawn
+        for i in range(len(g.sequence)):
+            if random() <= mutate_rate:
+                swap_id = i
+                while swap_id == i:
+                    swap_id = randint(0, len(g.sequence) - 1)
+                n = g.sequence[swap_id]
+                g.sequence[swap_id] = g.sequence[i]
+                g.sequence[i] = n
+        g.mutate_prob = mutate_rate
+
+        return g
 
     def report(self):
         print('Current Generation: {}\n'.format(self.generation))
@@ -161,7 +317,7 @@ if __name__ == '__main__':
     # seeding for reproduction
     # seed(5260)
     # np.random.seed(5260)
-    # test for vanilla solver
-    tsp_p = TSP()
-    optimizer = Optimizer(tsp_p, verbose=False)  # turn on verbose for logging
+    # test for MLP solver
+    tsp_p = TSP(cities=100)
+    optimizer = Optimizer(tsp_p, mode=OptimizerMode.MLP, verbose=True)  # turn on verbose for logging
     optimizer.fit()
