@@ -1,5 +1,8 @@
+from datetime import datetime
+import json
 import numpy as np
 from enum import Enum
+from pathlib import Path
 from itertools import combinations
 from random import shuffle, random, randint, seed
 from src.ea.gene import Gene
@@ -19,10 +22,11 @@ class OptimizerMode(Enum):
 class Optimizer:
     def __init__(self, problem, mode=OptimizerMode.VANILLA, population=10000,
                  bags_n=100, noise_size=10, depth=3, batch_size=32, device='cpu',  # DL parameters
-                 real_alpha=.7, train_iter=3, converge_epochs=3, converge_delta=3e-6,  # DL parameters
+                 real_alpha=.7, train_iter=3, converge_epochs=3, converge_delta=1e-5,  # DL parameters
                  candidate_buffer=50, max_mutate_rate=0.01, stop_delta=1e-6, stop_interval=20,
                  verbose=False, report_generation=10):
         self.problem = problem
+        self.history = {'generation': [], 'loss': []}
         self.mode = mode
         self.population = population
         self.candidate_buffer = candidate_buffer
@@ -79,7 +83,16 @@ class Optimizer:
                 self.report()
             if not self.verbose:
                 print('.', end='')
+            # record history
+            self.history['generation'].append(self.generation)
+            self.history['loss'].append(self.loss)
+        # converged, report results
+        timestamp = datetime.now().strftime("[%d/%m/%Y %H:%M:%S]")
+        filename = f'{timestamp}-history.json'
+        with open(Path.cwd().joinpath(filename), 'w') as f:
+            json.dump(self.history, f)
         print('\nConvergence reached:\n')
+        print(f'Results written to {filename}.\n')
         self.report()
 
     def solve(self):  # get solution for one generation
@@ -318,6 +331,6 @@ if __name__ == '__main__':
     # seed(5260)
     # np.random.seed(5260)
     # test for MLP solver
-    tsp_p = TSP(cities=100)
+    tsp_p = TSP(cities=30)
     optimizer = Optimizer(tsp_p, mode=OptimizerMode.MLP, verbose=True)  # turn on verbose for logging
     optimizer.fit()
