@@ -7,7 +7,7 @@ from itertools import combinations
 from random import shuffle, random, randint, seed
 from src.ea.gene import Gene
 from src.problems.tsp import TSP
-from models import ModelArgs, MLPDis, MLPGen, BagDataset
+from src.ea.models import ModelArgs, MLPDis, MLPGen, BagDataset
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -87,13 +87,14 @@ class Optimizer:
             self.history['generation'].append(self.generation)
             self.history['loss'].append(self.loss)
         # converged, report results
-        timestamp = datetime.now().strftime("[%d/%m/%Y %H:%M:%S]")
-        filename = f'{timestamp}-history.json'
-        with open(Path.cwd().joinpath(filename), 'w') as f:
+        timestamp = datetime.now().strftime("[%d-%m-%Y-%H:%M:%S]")
+        filename = Path.cwd().joinpath(f'{timestamp}-history.json')
+        with open(filename, 'w') as f:
             json.dump(self.history, f)
         print('\nConvergence reached:\n')
         print(f'Results written to {filename}.\n')
         self.report()
+        return filename
 
     def solve(self):  # get solution for one generation
         # select best candidates
@@ -113,7 +114,7 @@ class Optimizer:
         if self.mode == OptimizerMode.MLP:
             noises = torch.randn(self.bags_n, self.model_args.noise_size)
             self.mlp_gen.eval()
-            self.gen_feats = self.mlp_gen(noises).detach().numpy()
+            self.gen_feats = self.mlp_gen(noises.to(self.model_args.device)).cpu().detach().numpy()
 
         # populate next generation with crossover and mutation
         self.crossover(best_candidates)
@@ -225,7 +226,8 @@ class Optimizer:
         prev_loss = 0
         epoch_n = 1
 
-        print('\nTraining MLP GAN, Generation {}:\n'.format(self.generation))
+        if self.verbose:
+            print('\nTraining MLP GAN, Generation {}:\n'.format(self.generation))
 
         # one epoch
         while converge_epochs < self.converge_epochs or converge_delta > self.converge_delta:
@@ -238,15 +240,16 @@ class Optimizer:
                 self.mlp_dis.train()
                 self.mlp_gen.eval()
                 self.mlp_d_optimizer.zero_grad()
-                pred_deltas = self.mlp_dis(feats)
+                pred_deltas = self.mlp_dis(feats.to(self.model_args.device))
                 # fake samples
                 noises = torch.randn(self.model_args.batch_size, self.model_args.noise_size)
-                gen_deltas = self.mlp_dis(self.mlp_gen(noises))
+                gen_deltas = self.mlp_dis(self.mlp_gen(noises.to(self.model_args.device)))
                 # loss calculation
-                real_loss = self.criterion(pred_deltas.reshape(-1), fitness_deltas)
-                fake_loss = self.criterion(gen_deltas.reshape(-1), torch.zeros(self.model_args.batch_size))
+                real_loss = self.criterion(pred_deltas.reshape(-1), fitness_deltas.to(self.model_args.device))
+                fake_loss = self.criterion(gen_deltas.reshape(-1),
+                                           torch.zeros(self.model_args.batch_size).to(self.model_args.device))
                 loss = self.real_alpha * real_loss + (1-self.real_alpha) * fake_loss
-                last_loss = loss.item()
+                last_loss = loss.cpu().item()
                 loss.backward()
                 self.mlp_d_optimizer.step()
 
@@ -255,10 +258,10 @@ class Optimizer:
                 self.mlp_gen.train()
                 self.mlp_g_optimizer.zero_grad()
                 noises = torch.randn(self.model_args.batch_size, self.model_args.noise_size)
-                feats = self.mlp_gen(noises)
-                gen_deltas = self.mlp_dis(feats)
+                feats = self.mlp_gen(noises.to(self.model_args.device))
+                gen_deltas = self.mlp_dis(feats.to(self.model_args.device))
                 target_deltas = torch.ones(gen_deltas.shape[0])
-                loss = self.criterion(gen_deltas.reshape(-1), target_deltas)
+                loss = self.criterion(gen_deltas.reshape(-1), target_deltas.to(self.model_args.device))
                 # add a negative log penalty term to punish zero entries in generation
                 # loss += -0.2 * torch.log(feats+1e-6).sum()
                 loss.backward()
@@ -276,7 +279,8 @@ class Optimizer:
 
             epoch_n += 1
 
-        print('Training Complete.\n')
+        if self.verbose:
+            print('Training Complete.\n')
 
     def mlp_crossover(self, g1, g2, sn):
         # get crossover probs
