@@ -12,6 +12,7 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+import matplotlib.pyplot as plt
 
 
 class OptimizerMode(Enum):
@@ -26,7 +27,7 @@ class Optimizer:
                  candidate_buffer=50, max_mutate_rate=0.01, stop_delta=1e-6, stop_interval=20,
                  verbose=False, report_generation=10):
         self.problem = problem
-        self.history = {'generation': [], 'loss': []}
+        self.history = {'generation': [], 'loss': [], 'delta': []}
         self.mode = mode
         self.population = population
         self.candidate_buffer = candidate_buffer
@@ -73,6 +74,9 @@ class Optimizer:
         print('Evolving')
         # stopping condition: delta is small enough for specified generation interval
         s_interval = 0
+        # prepare for plotting
+        city = len(self.problem.cities)
+        Path(f'plot/{self.mode.name}_city_{city:03d}').mkdir(parents=True, exist_ok=True)
         while s_interval < self.stop_interval:
             solution = self.solve()
             loss = self.problem.get_loss(solution)
@@ -83,9 +87,12 @@ class Optimizer:
                 self.report()
             if not self.verbose:
                 print('.', end='')
+            # plot solution
+            self.plot_solution(solution)
             # record history
             self.history['generation'].append(self.generation)
             self.history['loss'].append(self.loss)
+            self.history['delta'].append(delta)
         # converged, report results
         timestamp = datetime.now().strftime("[%d-%m-%Y-%H:%M:%S]")
         filename = Path.cwd().joinpath(f'{timestamp}-history.json')
@@ -322,6 +329,27 @@ class Optimizer:
         g.mutate_prob = mutate_rate
 
         return g
+    
+    def plot_solution(self, solution):
+        solution_cities = [self.problem.cities[i] for i in solution]
+        # append the first city to complete the loop
+        solution_cities.append(self.problem.cities[solution[0]])
+        x = [c.x for c in solution_cities]
+        y = [c.y for c in solution_cities]
+        plt.plot(x, y, marker='.', linestyle='-', linewidth=0.3)
+        
+        # set range
+        plt.xlim([-3, 3])
+        plt.ylim([-3, 3])
+        
+        # remove ticks
+        plt.xticks([])
+        plt.yticks([])
+        
+        # save image
+        city = len(solution)
+        plt.savefig(f'plot/{self.mode.name}_city_{city:03d}/generation_{self.generation:09d}.png', dpi=200)
+        plt.clf()
 
     def report(self):
         print('Current Generation: {}\n'.format(self.generation))

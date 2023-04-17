@@ -38,7 +38,8 @@ class TSP(Problem):
             if city_distrib == CityDistrib.UNIFORM:
                 city = City(random(), random())
             elif city_distrib == CityDistrib.NORMAL:
-                city = City(np.random.randn(1)[0], np.random.randn(1)[0])
+                x, y = np.random.randn(1)[0], np.random.randn(1)[0]
+                city = City(np.clip(x, -3, 3), np.clip(y, -3, 3))
             self.cities.append(city)
 
     def get_loss(self, solution):
