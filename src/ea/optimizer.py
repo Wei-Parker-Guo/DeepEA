@@ -14,6 +14,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 
+sys_path = "/content/drive/MyDrive/DeepEA"
 
 class OptimizerMode(Enum):
     VANILLA = 0
@@ -76,7 +77,7 @@ class Optimizer:
         s_interval = 0
         # prepare for plotting
         city = len(self.problem.cities)
-        Path(f'plot/{self.mode.name}_city_{city:03d}').mkdir(parents=True, exist_ok=True)
+        Path(f'{sys_path}/plot/{city}/{self.mode.name}_city_{city:03d}').mkdir(parents=True, exist_ok=True)
         while s_interval < self.stop_interval:
             solution = self.solve()
             loss = self.problem.get_loss(solution)
@@ -94,8 +95,12 @@ class Optimizer:
             self.history['loss'].append(self.loss)
             self.history['delta'].append(delta)
         # converged, report results
-        timestamp = datetime.now().strftime("[%d-%m-%Y-%H:%M:%S]")
-        filename = Path.cwd().joinpath(f'{timestamp}-history.json')
+        # timestamp = datetime.now().strftime("[%d-%m-%Y-%H:%M:%S]")
+        # filename = Path.cwd().joinpath(f'{timestamp}-history.json')
+        if self.mode == OptimizerMode.VANILLA:
+            filename = f"{sys_path}/data/{self.problem.gene_length}_0.json"
+        elif self.mode == OptimizerMode.MLP:
+            filename = f"{sys_path}/data/{self.problem.gene_length}_1.json"
         with open(filename, 'w') as f:
             json.dump(self.history, f)
         print('\nConvergence reached:\n')
@@ -348,7 +353,9 @@ class Optimizer:
         
         # save image
         city = len(solution)
-        plt.savefig(f'plot/{self.mode.name}_city_{city:03d}/generation_{self.generation:09d}.png', dpi=200)
+        # plt.savefig(f'plot/{self.mode.name}_city_{city:03d}/generation_{self.generation:09d}.png', dpi=200)
+        save_path = f"{sys_path}/plot/{city}/{self.mode.name}_city_{city:03d}/generation_{self.generation:09d}.png"
+        plt.savefig(save_path, dpi=200)
         plt.clf()
 
     def report(self):
