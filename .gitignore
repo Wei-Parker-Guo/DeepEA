@@ -1,6 +1,5 @@
 .DS_Store
 .idea
-*.json
 *.zip
 .ipynb_checkpoints
 *.csv
